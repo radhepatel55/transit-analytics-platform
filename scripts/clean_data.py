@@ -23,4 +23,4 @@ print(df.isna().sum())
 
 # save a cleaned file
 df.to_excel(DATA_DIR / "ttc-bus-delay-data-2024-clean.xlsx", index=False)
-print("\nSaved cleaned file!")
+print("\nSaved cleaned file!") 
