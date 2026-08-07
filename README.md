@@ -14,7 +14,7 @@ This project answers real operational questions that a TTC transit planner might
 
 ## Architecture
 
-<img width="1415" height="232" alt="Image" src="https://github.com/user-attachments/assets/60e6aa91-a164-4b32-8c2e-366fc076931c" /> 
+<img width="1348" height="755" alt="image" src="https://github.com/user-attachments/assets/cf51d4d4-0890-4516-b8d3-73d2b1fff5ee" />
 
 
 ## Tech Stack
@@ -26,28 +26,30 @@ This project answers real operational questions that a TTC transit planner might
 | Object storage | MinIO (S3-compatible) | Durable storage, mirrors real AWS S3 API via boto3 |
 | Orchestration | Apache Airflow (Docker) | Automates the single-year ingestion pipeline on a schedule |
 | Distributed processing | Databricks, PySpark | Scalable aggregation and analysis |
-| Data warehouse | Snowflake | Central store for clean, query-ready tables |
+| Data warehouse | Snowflake | Star schema: `DELAYS` fact table + `CALENDAR` dimension, joined on Date |
 | Visualization | Power BI | Interactive dashboard for stakeholders |
 
 ## Dataset
 
-Source: [City of Toronto Open Data Portal](https://open.toronto.ca) — TTC Bus Delay Data, 2020–2024 (five full calendar years, ~180,000 cleaned records).
+Source: [City of Toronto Open Data Portal](https://open.toronto.ca) — TTC Bus Delay Data, 2020–2024 (five full calendar years, 180,075 cleaned records).
 
 **Data quality notes** (documented, not hidden — this is real open government data with real quirks):
-- 2020's file used different column names (`Report Date`, `Delay`, `Gap`) than 2021-2024 (`Date`, `Min Delay`, `Min Gap`) —> resolved with a column-standardization step.
-- Rows missing a `Route` value (~1%) were dropped, since delays can't be attributed to a specific route without one —> investigated and found to correlate with high-stress incident types (collisions, security events) where the route number was likely skipped during logging.
-- Missing `Direction` values were filled as `"NaN"` rather than dropped, since direction wasn't essential to the core analysis questions.
+- 2020's file used different column names (`Report Date`, `Delay`, `Gap`) than 2021-2024 (`Date`, `Min Delay`, `Min Gap`) — resolved with a column-standardization step.
+- Rows missing a `Route` value (~1%) were dropped, since delays can't be attributed to a specific route without one — investigated and found to correlate with high-stress incident types (collisions, security events) where the route number was likely skipped during logging.
+- Missing `Direction` values were filled as `"Unknown"` rather than dropped, since direction wasn't essential to the core analysis questions.
+- 20 rows (0.011%) had a column-shift caused by unescaped commas in the `Location` field during CSV parsing (detectable by stray numeric values landing in `Direction`); identified via pattern matching and excluded rather than reconstructed, given the negligible volume.
+- `Route` is stored as text (not numeric) in the warehouse, since some route codes are alphanumeric (e.g. `YU`), which an early numeric-type assumption briefly broke.
 - 2025 data was evaluated but excluded from this version: TTC changed its incident classification system that year (categorical `Incident` labels replaced with internal `Code` values), and a reliable bus-specific code dictionary could not be confirmed. Noted as a candidate for a future update.
 
 ## Pipeline Stages
 
-1. **Ingest** — load raw yearly `.xlsx` files with pandas
+1. **Ingest** — load raw yearly `.xlsx`/`.csv` files with pandas
 2. **Clean** — standardize schemas across years, handle missing values, validate assumptions against the data rather than guessing
 3. **Store** — upload cleaned data to S3-compatible object storage (MinIO)
 4. **Orchestrate** — Airflow DAG automates load → clean → upload for the recurring single-year pipeline, running in Docker with a Postgres metadata store and Celery executor
-5. **Analyze** — PySpark aggregations across five dimensions: route, hour of day, incident type, day of week, and location
-6. **Warehouse** — clean summary and fact tables loaded into Snowflake
-7. **Visualize** — Power BI dashboard connected live to Snowflake
+5. **Combine & model** — 2020-2024 yearly files combined into one 180,095-row dataset in PySpark; a separate Calendar dimension table (1,827 rows: one per day, with Year/Month/Quarter/DayOfWeek/IsWeekend) generated to support proper date-based analysis
+6. **Warehouse** — loaded into Snowflake as a star schema: `DELAYS` fact table joined to `CALENDAR` dimension via a primary/foreign key relationship on Date
+7. **Visualize** — Power BI connects live to Snowflake, aggregating directly off the fact table (not pre-computed summaries), enabling proper Top-N filtering and cross-chart interactivity
 
 ## Dashboard
 
@@ -58,24 +60,27 @@ Source: [City of Toronto Open Data Portal](https://open.toronto.ca) — TTC Bus 
 ### Dashboard Pages
 
 **Page 1 — Overview**
-*(screenshot: `./dashboard/page1_overview.png`)*
-High-level summary view — KPI cards for total incidents and average delay, worst routes by average delay, and delay severity by hour of day. Answers "what's happening overall?" at a glance.
+*<img width="1162" height="651" alt="image" src="https://github.com/user-attachments/assets/07a201c5-592f-490a-a424-678afdcfba29" />*
+High-level summary view — four KPI cards (Total Delay Incidents, Average Delay, Longest Single Delay, Routes Impacted), worst routes by average delay (Route 174 highest among routes with a meaningful incident count), and delay severity by hour of day. Answers "what's happening overall?" at a glance.
 
-**Page 2 — [add title]**
-*(screenshot: `./dashboard/page2_....png`)*
-[Describe what this page shows and what question it answers]
+**Page 2 — Operational Analysis**
+*<img width="1162" height="652" alt="image" src="https://github.com/user-attachments/assets/e0b837ca-cd1a-41ea-914d-4456e781a276" />*
+An investigative view for digging into specifics — a monthly delay trend line (2020–2024) built on the Calendar dimension table, a Top 15 worst-locations table, a date range slicer, and a Route slicer that cross-filters the whole page. Two comparison cards (Selected Route Avg Delay vs. System-Wide Avg Delay, the latter using a `CALCULATE`/`ALL` DAX measure to stay fixed regardless of filter) let a viewer judge whether a chosen route is actually worse than typical. Selecting Route 77 shows its specific locations, trend, and how it compares to the system average. Answers "where and when is this happening, and is it actually a problem?"
 
-**Page 3 — [add title]**
-*(screenshot: `./dashboard/page3_....png`)*
-[Describe what this page shows and what question it answers]
+**Page 3 — Insights**
+*<img width="1157" height="652" alt="image" src="https://github.com/user-attachments/assets/c20dc527-f2a5-4dda-a445-347684ccc0f1" />*
+Root-cause view — incident type breakdown (Diversions stand out as the largest driver of severe delays), average delay by day of week (correctly ordered Monday–Sunday via a `WEEKDAY()`-based sort column), and a written insights callout summarizing the key takeaways and the 2020–2024 trend: delays were higher and more volatile in 2020–2021 (peaking ~26 min), stabilized into an 18–24 min range from 2022 onward, with a modest uptick in early 2024 worth monitoring. Answers "why is this happening, and what should management watch?"
 
 ## Key Findings
 
-- **Route 77** has the highest average delay (136 min) among routes with a statistically meaningful incident count (60+ incidents)
-- **7 AM** is a sharp, isolated delay spike — notably worse than the surrounding morning rush hour, and worse than the evening rush entirely
-- **Diversions** are the single largest driver of severe delays (118.8 min average, 4,464 incidents) — far more impactful than mechanical failures or collisions
-- **Jane and Steeles** and the surrounding northwest-Toronto corridor show a recurring cluster of high-delay locations
-- Day-of-week has only a mild effect on delay severity (Monday 22.8 min vs. Saturday 20.0 min avg) — a useful negative finding, not every dimension needs to show a dramatic pattern
+*Based on the full 2020–2024 dataset (180,075 cleaned records).*
+
+- **~180,075 total delay incidents** across the 5-year period, averaging **20.64 minutes** per incident
+- **Route 77** has the highest average delay among routes with a statistically meaningful incident count — flagged for operational review
+- **7 AM** shows a visible delay spike relative to surrounding hours — worth additional resourcing during this window
+- **Diversions** are the single largest driver of severe delays — far more impactful than mechanical failures or collisions
+- Delay severity has **generally improved and stabilized** since 2020: volatile 2020–2021 peaks (~26 min) settled into a steadier 18–24 min range from 2022 onward, with a modest uptick in early 2024 worth continued monitoring
+- Day-of-week has only a mild effect on delay severity — a useful negative finding, not every dimension needs to show a dramatic pattern
 
 ## Notes on Scope
 
