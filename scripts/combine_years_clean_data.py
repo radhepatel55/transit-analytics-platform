@@ -4,7 +4,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR.parent / "data"
 
-years = [2020, 2021, 2022, 2023, 2024]
+years = [2020, 2021, 2022, 2023, 2024, 2025]
 all_years_data = []
 
 column_rename_map = {
@@ -14,13 +14,16 @@ column_rename_map = {
 }
 
 for year in years:
-    file_path = DATA_DIR / f"ttc-bus-delay-data-{year}.xlsx"
+    if year == 2025:
+        file_path = DATA_DIR / f"ttc-bus-delay-data-{year}.csv"
+        df_year = pd.read_csv(file_path)
+    else:
+        file_path = DATA_DIR / f"ttc-bus-delay-data-{year}.xlsx"
+        df_year = pd.read_excel(file_path)
+    
     print(f"Loading {year}...")
-    
-    df_year = pd.read_excel(file_path)
-    df_year = df_year.rename(columns=column_rename_map) 
+    df_year = df_year.rename(columns=column_rename_map)
     df_year["Year"] = year
-    
     all_years_data.append(df_year)
     print(f"  {year}: {len(df_year)} rows loaded")
 
@@ -40,5 +43,5 @@ combined['Direction'] = combined['Direction'].fillna('NaN')
 print("\nMissing values remaining:")
 print(combined.isna().sum())
 
-combined.to_excel(DATA_DIR / "ttc-bus-delay-2020-2024-clean.xlsx", index=False)
+combined.to_excel(DATA_DIR / "ttc-bus-delay-2020-2025-clean.xlsx", index=False)
 print("\nSaved combined file!")
